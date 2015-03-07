@@ -24,6 +24,8 @@ import com.microsoft.tfs.core.httpclient.UsernamePasswordCredentials;
 import com.microsoft.tfs.core.util.CredentialsUtils;
 import com.microsoft.tfs.core.util.URIUtils;
 import com.microsoft.tfs.util.Closable;
+import jenkins.plugins.tfslib.TfsSdkLibAccess;
+import jenkins.plugins.tfslib.TfsSdkLibUser;
 
 public class Server implements ServerConfigurationProvider, Closable {
     
@@ -43,6 +45,7 @@ public class Server implements ServerConfigurationProvider, Closable {
         this.userPassword = password;
         final URI uri = URIUtils.newURI(url);
 
+        TfsSdkLibAccess.ensureNativeLibrariesConfigured();
         Credentials credentials = null;
         // In case no user name is provided and the current platform supports
         // default credentials, use default credentials
@@ -54,7 +57,6 @@ public class Server implements ServerConfigurationProvider, Closable {
         }
 
         if (credentials != null) {
-            ensureNativeLibrariesConfigured();
             this.tpc = new TFSTeamProjectCollection(uri, credentials);
         }
         else {
@@ -62,36 +64,6 @@ public class Server implements ServerConfigurationProvider, Closable {
         }
     }
 
-    static synchronized void ensureNativeLibrariesConfigured() {
-        final String nativeFolder = System.getProperty(nativeFolderPropertyName);
-        if (nativeFolder == null) {
-            final Class<TFSTeamProjectCollection> metaclass = TFSTeamProjectCollection.class;
-            final ProtectionDomain protectionDomain = metaclass.getProtectionDomain();
-            final CodeSource codeSource = protectionDomain.getCodeSource();
-            if (codeSource == null) {
-                // TODO: log that we were unable to determine the codeSource
-                return;
-            }
-            final URL location = codeSource.getLocation();
-            // inspired by http://hg.netbeans.org/main/file/default/openide.filesystems/src/org/openide/filesystems/FileUtil.java#l1992
-            final String u = location.toString();
-            URI locationUri;
-            if (u.startsWith("jar:file:") && u.endsWith("!/")) {
-                locationUri = URI.create(u.substring(4, u.length() - 2));
-            }
-            else if (u.startsWith("file:")) {
-                locationUri = URI.create(u);
-            }
-            else {
-                // TODO: log that we were unable to determine location from codeSource
-                return;
-            }
-            final File pathToJar = new File(locationUri);
-            final File pathToLibFolder = pathToJar.getParentFile();
-            final File pathToNativeFolder = new File(pathToLibFolder, "native");
-            System.setProperty(nativeFolderPropertyName, pathToNativeFolder.toString()); 
-        }
-    }
 
     Server(String url) {
         this(null, url, null, null);
@@ -138,24 +110,11 @@ public class Server implements ServerConfigurationProvider, Closable {
 
     public synchronized void close() {
         if (this.tpc != null) {
-            // Close the configuration server connection that should be closed by
-            // TFSTeamProjectCollection
-            // The field is private, so use reflection
-            // This should be removed when the TFS SDK is fixed
-            // Post in MSDN forum: social.msdn.microsoft.com/Forums/vstudio/en-US/79985ef1-b35d-4fc5-af0b-b95e28402b83
-            try {
-                Field f = TFSTeamProjectCollection.class.getDeclaredField("configurationServer");
-                f.setAccessible(true);
-                TFSConfigurationServer configurationServer = (TFSConfigurationServer) f.get(this.tpc);
-                if (configurationServer != null) {
-                    configurationServer.close();
-                }
-                f.setAccessible(false);
-            } catch (NoSuchFieldException ignore) {
-            } catch (IllegalAccessException ignore) {
+            TFSConfigurationServer configurationServer = tpc.getConfigurationServer();
+            if (configurationServer != null) {
+                configurationServer.close();
             }
             this.tpc.close();
         }
-        
     }
 }
